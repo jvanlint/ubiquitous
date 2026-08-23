@@ -4,17 +4,47 @@
 	"Author": "Deadfrog Studios",
 	"Actions": [
 		{
-			"Name": "Counter",
-			"UUID": "com.deadfrog-studios.ubiquitous.increment",
+			"Name": "Network Stats",
+			"UUID": "com.deadfrog-studios.ubiquitous.throughput",
 			"Icon": "imgs/actions/counter/icon",
-			"Tooltip": "Displays a count, which increments by one on press.",
-			"PropertyInspectorPath": "ui/increment-counter.html",
+			"Tooltip": "Cycles through live UniFi network statistics. Hold an IP view to copy the address.",
+			"PropertyInspectorPath": "ui/live-throughput.html",
 			"Controllers": [
 				"Keypad"
 			],
 			"States": [
 				{
-					"Image": "imgs/actions/counter/key",
+					"Image": "imgs/actions/counter/blank",
+					"TitleAlignment": "middle"
+				}
+			]
+		},
+		{
+			"Name": "Device Metrics",
+			"UUID": "com.deadfrog-studios.ubiquitous.device-metrics",
+			"Icon": "imgs/actions/counter/icon",
+			"Tooltip": "Monitor a UniFi access point, switch, or gateway. Hold to open the device in UniFi.",
+			"PropertyInspectorPath": "ui/device-metrics.html",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/counter/blank",
+					"TitleAlignment": "middle"
+				}
+			]
+		},
+		{
+			"Name": "Client Metrics",
+			"UUID": "com.deadfrog-studios.ubiquitous.client-metrics",
+			"Icon": "imgs/actions/counter/icon",
+			"Tooltip": "Monitor an individual UniFi client or display connected-client summaries. Hold to open client details.",
+			"PropertyInspectorPath": "ui/client-metrics.html",
+			"Controllers": ["Keypad"],
+			"States": [
+				{
+					"Image": "imgs/actions/counter/blank",
 					"TitleAlignment": "middle"
 				}
 			]
@@ -23,7 +53,7 @@
 	"Category": "Ubiquitous",
 	"CategoryIcon": "imgs/plugin/category-icon",
 	"CodePath": "bin/plugin.js",
-	"Description": "A plugion for monitoring Ubiquiti networks and hardware.",
+	"Description": "A plugin for monitoring Ubiquiti networks and hardware.",
 	"Icon": "imgs/plugin/marketplace",
 	"SDKVersion": 3,
 	"Software": {

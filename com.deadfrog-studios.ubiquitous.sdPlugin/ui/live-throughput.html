@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head lang="en">
+	<title>UniFi Network Stats Settings</title>
+    <meta charset="utf-8" />
+    <script src="https://sdpi-components.dev/releases/v4/sdpi-components.js"></script>
+</head>
+<body>
+    <sdpi-item label="UDM Address">
+        <sdpi-textfield setting="udmAddress" placeholder="192.168.1.1"></sdpi-textfield>
+    </sdpi-item>
+    <sdpi-item label="API Key">
+        <sdpi-password setting="apiKey" placeholder="Local Network API key"></sdpi-password>
+    </sdpi-item>
+    <sdpi-item label="Site">
+        <sdpi-select id="site" setting="siteId" datasource="getSites" loading="Loading sites..." hot-reload></sdpi-select>
+    </sdpi-item>
+    <sdpi-item label="Gateway">
+        <sdpi-select id="gateway" setting="gatewayDeviceId" datasource="getGateways" loading="Loading gateways..." hot-reload></sdpi-select>
+    </sdpi-item>
+	<sdpi-item label="Metric">
+		<sdpi-select setting="viewIndex" value-type="number" default="0">
+			<option value="0">Throughput</option>
+			<option value="1">Monthly Data</option>
+			<option value="2">IP Address</option>
+			<option value="3">Gateway Uptime</option>
+			<option value="4">ISP Uptime</option>
+			<option value="5">Latency</option>
+			<option value="6">Status</option>
+		</sdpi-select>
+	</sdpi-item>
+    <sdpi-item label="Poll every">
+		<sdpi-range setting="pollIntervalSeconds" min="1" max="60" step="1" default="5" showlabels></sdpi-range>
+    </sdpi-item>
+    <sdpi-item label="Graph color">
+        <sdpi-color setting="graphColor" default="#20e3b2"></sdpi-color>
+    </sdpi-item>
+	<sdpi-item label="Background color">
+		<sdpi-color setting="backgroundColor" default="#17172b"></sdpi-color>
+	</sdpi-item>
+    <sdpi-item label="Self-signed certificate">
+        <sdpi-checkbox setting="allowSelfSignedCertificate" default="true">Allow (local networks only)</sdpi-checkbox>
+    </sdpi-item>
+
+    <script>
+        window.addEventListener("DOMContentLoaded", () => {
+            const site = document.querySelector("#site");
+            const gateway = document.querySelector("#gateway");
+            const address = document.querySelector('[setting="udmAddress"]');
+            const apiKey = document.querySelector('[setting="apiKey"]');
+            const certificate = document.querySelector('[setting="allowSelfSignedCertificate"]');
+            let refreshTimer;
+
+            const refreshConnections = () => {
+                clearTimeout(refreshTimer);
+                refreshTimer = setTimeout(() => {
+                    site.refresh();
+                    gateway.refresh();
+                }, 500);
+            };
+
+            address.addEventListener("change", refreshConnections);
+            apiKey.addEventListener("change", refreshConnections);
+            certificate.addEventListener("change", refreshConnections);
+            certificate.addEventListener("input", refreshConnections);
+            site.addEventListener("change", () => setTimeout(() => gateway.refresh(), 200));
+        });
+    </script>
+</body>
+</html>

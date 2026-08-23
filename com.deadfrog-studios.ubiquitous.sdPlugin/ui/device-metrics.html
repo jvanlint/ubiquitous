@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head lang="en">
+	<title>UniFi Device Metrics Settings</title>
+	<meta charset="utf-8" />
+	<script src="https://sdpi-components.dev/releases/v4/sdpi-components.js"></script>
+</head>
+<body>
+	<sdpi-item label="UDM Address">
+		<sdpi-textfield setting="udmAddress" placeholder="192.168.1.1"></sdpi-textfield>
+	</sdpi-item>
+	<sdpi-item label="API Key">
+		<sdpi-password setting="apiKey" placeholder="Local Network API key"></sdpi-password>
+	</sdpi-item>
+	<sdpi-item label="Site">
+		<sdpi-select id="site" setting="siteId" datasource="getSites" loading="Loading sites..." hot-reload></sdpi-select>
+	</sdpi-item>
+	<sdpi-item label="Device">
+		<sdpi-select id="device" setting="deviceId" datasource="getDevices" loading="Loading devices..." hot-reload></sdpi-select>
+	</sdpi-item>
+	<sdpi-item label="Metric">
+		<sdpi-select setting="viewIndex" value-type="number" default="0">
+			<option value="0">Status / IP</option>
+			<option value="1">Performance</option>
+			<option value="2">Network</option>
+			<option value="3">Uptime</option>
+		</sdpi-select>
+	</sdpi-item>
+	<sdpi-item label="Poll every">
+		<sdpi-range setting="pollIntervalSeconds" min="1" max="60" step="1" default="5" showlabels></sdpi-range>
+	</sdpi-item>
+	<sdpi-item label="Accent color">
+		<sdpi-color setting="graphColor" default="#20e3b2"></sdpi-color>
+	</sdpi-item>
+	<sdpi-item label="Background color">
+		<sdpi-color setting="backgroundColor" default="#17172b"></sdpi-color>
+	</sdpi-item>
+	<sdpi-item label="Self-signed certificate">
+		<sdpi-checkbox setting="allowSelfSignedCertificate" default="true">Allow (local networks only)</sdpi-checkbox>
+	</sdpi-item>
+	<sdpi-item>
+		<sdpi-text>Press a Status key to toggle its IP address. Hold any Device Metrics key to open that device in UniFi.</sdpi-text>
+	</sdpi-item>
+	<script>
+		window.addEventListener("DOMContentLoaded", () => {
+			const site = document.querySelector("#site");
+			const device = document.querySelector("#device");
+			const address = document.querySelector('[setting="udmAddress"]');
+			const apiKey = document.querySelector('[setting="apiKey"]');
+			const certificate = document.querySelector('[setting="allowSelfSignedCertificate"]');
+			let timer;
+			const refresh = () => {
+				clearTimeout(timer);
+				timer = setTimeout(() => { site.refresh(); device.refresh(); }, 500);
+			};
+			address.addEventListener("change", refresh);
+			apiKey.addEventListener("change", refresh);
+			certificate.addEventListener("change", refresh);
+			certificate.addEventListener("input", refresh);
+			site.addEventListener("change", () => setTimeout(() => device.refresh(), 200));
+		});
+	</script>
+</body>
+</html>

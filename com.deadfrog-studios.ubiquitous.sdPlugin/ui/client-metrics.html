@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head lang="en">
+	<title>UniFi Client Metrics Settings</title>
+	<meta charset="utf-8" />
+	<script src="https://sdpi-components.dev/releases/v4/sdpi-components.js"></script>
+</head>
+<body>
+	<sdpi-item label="UDM Address"><sdpi-textfield setting="udmAddress" placeholder="192.168.1.1"></sdpi-textfield></sdpi-item>
+	<sdpi-item label="API Key"><sdpi-password setting="apiKey" placeholder="Local Network API key"></sdpi-password></sdpi-item>
+	<sdpi-item label="Site"><sdpi-select id="site" setting="siteId" datasource="getSites" loading="Loading sites..." hot-reload></sdpi-select></sdpi-item>
+	<sdpi-item label="Mode">
+		<sdpi-select id="mode" setting="mode" default="individual">
+			<option value="individual">Individual client</option>
+			<option value="summary">Client summary</option>
+		</sdpi-select>
+	</sdpi-item>
+	<div id="individual-options">
+		<sdpi-item label="Search"><sdpi-textfield id="search" setting="clientSearch" placeholder="Name or IP address"></sdpi-textfield></sdpi-item>
+		<sdpi-item label="Client"><sdpi-select id="client" setting="clientId" datasource="getClients" loading="Loading clients..." hot-reload></sdpi-select></sdpi-item>
+		<sdpi-item label="Metric">
+			<sdpi-select setting="individualMetric" value-type="number" default="0">
+				<option value="0">Connection speed</option><option value="1">Experience score</option>
+				<option value="2">Data usage</option><option value="3">Signal strength</option>
+				<option value="4">Connection point</option><option value="5">WiFi channel</option>
+				<option value="6">TX retries</option><option value="7">Uptime</option>
+				<option value="8">Live bandwidth</option>
+			</sdpi-select>
+		</sdpi-item>
+	</div>
+	<div id="summary-options">
+		<sdpi-item label="Breakdown">
+			<sdpi-select setting="summaryMetric" value-type="number" default="0">
+				<option value="0">Total clients</option><option value="1">Wired / Wireless</option>
+				<option value="2">Guest / Non-guest</option><option value="3">By network</option>
+			</sdpi-select>
+		</sdpi-item>
+	</div>
+	<sdpi-item label="Poll every"><sdpi-range setting="pollIntervalSeconds" min="1" max="60" step="1" default="5" showlabels></sdpi-range></sdpi-item>
+	<sdpi-item label="Accent color"><sdpi-color setting="graphColor" default="#20e3b2"></sdpi-color></sdpi-item>
+	<sdpi-item label="Background color"><sdpi-color setting="backgroundColor" default="#17172b"></sdpi-color></sdpi-item>
+	<sdpi-item label="Self-signed certificate"><sdpi-checkbox setting="allowSelfSignedCertificate" default="true">Allow (local networks only)</sdpi-checkbox></sdpi-item>
+	<sdpi-item><sdpi-text>Hold an Individual Mode key to open that client in UniFi.</sdpi-text></sdpi-item>
+	<script>
+		window.addEventListener("DOMContentLoaded", () => {
+			const site = document.querySelector("#site"), client = document.querySelector("#client");
+			const mode = document.querySelector("#mode"), search = document.querySelector("#search");
+			const individual = document.querySelector("#individual-options"), summary = document.querySelector("#summary-options");
+			const address = document.querySelector('[setting="udmAddress"]'), apiKey = document.querySelector('[setting="apiKey"]');
+			const certificate = document.querySelector('[setting="allowSelfSignedCertificate"]');
+			let connectionTimer, searchTimer;
+			const updateMode = () => {
+				const summaryMode = mode.value === "summary";
+				individual.style.display = summaryMode ? "none" : "block";
+				summary.style.display = summaryMode ? "block" : "none";
+			};
+			const refreshConnections = () => {
+				clearTimeout(connectionTimer);
+				connectionTimer = setTimeout(() => { site.refresh(); client.refresh(); }, 500);
+			};
+			mode.addEventListener("change", updateMode); mode.addEventListener("input", updateMode);
+			search.addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => client.refresh(), 350); });
+			address.addEventListener("change", refreshConnections); apiKey.addEventListener("change", refreshConnections);
+			certificate.addEventListener("change", refreshConnections); certificate.addEventListener("input", refreshConnections);
+			site.addEventListener("change", () => setTimeout(() => client.refresh(), 200));
+			setTimeout(updateMode, 0);
+		});
+	</script>
+</body>
+</html>
