@@ -1,0 +1,33 @@
+.tabs {
+	display: flex;
+	gap: 4px;
+	margin: 8px 12px 14px;
+	border-bottom: 1px solid #555;
+}
+
+.tab-button {
+	flex: 1;
+	padding: 8px;
+	border: 0;
+	border-bottom: 2px solid transparent;
+	background: transparent;
+	color: #bbb;
+	cursor: pointer;
+}
+
+.tab-button.active {
+	border-bottom-color: #20e3b2;
+	color: #fff;
+}
+
+.tab-panel[hidden] {
+	display: none;
+}
+
+.setup-note {
+	margin: 8px 16px 14px;
+	color: #bbb;
+	font-size: 11px;
+	font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	line-height: 1.4;
+}

@@ -4,14 +4,12 @@
 	<title>UniFi Device Metrics Settings</title>
 	<meta charset="utf-8" />
 	<script src="https://sdpi-components.dev/releases/v4/sdpi-components.js"></script>
+	<link rel="stylesheet" href="common/property-inspector.css">
+	<script src="common/global-settings.js"></script>
 </head>
 <body>
-	<sdpi-item label="UDM Address">
-		<sdpi-textfield setting="udmAddress" placeholder="192.168.1.1"></sdpi-textfield>
-	</sdpi-item>
-	<sdpi-item label="API Key">
-		<sdpi-password setting="apiKey" placeholder="Local Network API key"></sdpi-password>
-	</sdpi-item>
+	<nav class="tabs"><button class="tab-button active" data-tab="action-tab">Action</button><button class="tab-button" data-tab="setup-tab">Setup</button></nav>
+	<section id="action-tab" class="tab-panel">
 	<sdpi-item label="Site">
 		<sdpi-select id="site" setting="siteId" datasource="getSites" loading="Loading sites..." hot-reload></sdpi-select>
 	</sdpi-item>
@@ -20,14 +18,13 @@
 	</sdpi-item>
 	<sdpi-item label="Metric">
 		<sdpi-select setting="viewIndex" value-type="number" default="0">
-			<option value="0">Status / IP</option>
-			<option value="1">Performance</option>
-			<option value="2">Network</option>
-			<option value="3">Uptime</option>
+			<option value="0">Performance</option>
+			<option value="1">Network</option>
+			<option value="2">Uptime</option>
 		</sdpi-select>
 	</sdpi-item>
-	<sdpi-item label="Poll every">
-		<sdpi-range setting="pollIntervalSeconds" min="1" max="60" step="1" default="5" showlabels></sdpi-range>
+	<sdpi-item label="Poll seconds">
+		<sdpi-textfield setting="pollIntervalSeconds" pattern="^[1-9][0-9]*$" placeholder="5" maxlength="4"></sdpi-textfield>
 	</sdpi-item>
 	<sdpi-item label="Accent color">
 		<sdpi-color setting="graphColor" default="#20e3b2"></sdpi-color>
@@ -35,28 +32,28 @@
 	<sdpi-item label="Background color">
 		<sdpi-color setting="backgroundColor" default="#17172b"></sdpi-color>
 	</sdpi-item>
-	<sdpi-item label="Self-signed certificate">
-		<sdpi-checkbox setting="allowSelfSignedCertificate" default="true">Allow (local networks only)</sdpi-checkbox>
-	</sdpi-item>
 	<sdpi-item>
-		<sdpi-text>Press a Status key to toggle its IP address. Hold any Device Metrics key to open that device in UniFi.</sdpi-text>
+		<sdpi-text>Performance includes device status, CPU, and RAM. Hold any Device Metrics key to open that device in UniFi.</sdpi-text>
 	</sdpi-item>
+	</section>
+	<section id="setup-tab" class="tab-panel" hidden>
+		<p class="setup-note">These connection settings are shared by every Ubiquitous action.</p>
+		<sdpi-item label="UDM Address"><sdpi-textfield id="global-udm-address" placeholder="192.168.1.1"></sdpi-textfield></sdpi-item>
+		<sdpi-item label="API Key"><sdpi-password id="global-api-key" placeholder="Local Network API key"></sdpi-password></sdpi-item>
+		<sdpi-item label="Local certificate"><sdpi-checkbox id="global-allow-self-signed" default="true">Allow untrusted certificate</sdpi-checkbox></sdpi-item>
+		<p class="setup-note">Enable this when connecting directly to a local UniFi console that uses its default self-signed HTTPS certificate. The connection is encrypted, but the certificate's identity cannot be independently verified.</p>
+	</section>
 	<script>
 		window.addEventListener("DOMContentLoaded", () => {
 			const site = document.querySelector("#site");
 			const device = document.querySelector("#device");
-			const address = document.querySelector('[setting="udmAddress"]');
-			const apiKey = document.querySelector('[setting="apiKey"]');
-			const certificate = document.querySelector('[setting="allowSelfSignedCertificate"]');
 			let timer;
 			const refresh = () => {
 				clearTimeout(timer);
 				timer = setTimeout(() => { site.refresh(); device.refresh(); }, 500);
 			};
-			address.addEventListener("change", refresh);
-			apiKey.addEventListener("change", refresh);
-			certificate.addEventListener("change", refresh);
-			certificate.addEventListener("input", refresh);
+			window.addEventListener("unifi-global-settings-change", refresh);
+			window.addEventListener("unifi-action-tab-shown", refresh);
 			site.addEventListener("change", () => setTimeout(() => device.refresh(), 200));
 		});
 	</script>

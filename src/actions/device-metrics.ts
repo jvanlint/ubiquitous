@@ -1,11 +1,14 @@
 import streamDeck, { action, DidReceiveSettingsEvent, KeyDownEvent, KeyUpEvent, SendToPluginEvent, SingletonAction, WillAppearEvent, WillDisappearEvent } from "@elgato/streamdeck";
+import { requestLegacy, requestUniFi, withGlobalUniFiSettings, withoutGlobalUniFiSettings } from "../common/unifi-api";
+import { networkStatsIcon } from "../common/svg-icons";
 import {
 	centeredTextPath, DataSourceItem, DataSourceRequest, extractNumber, getDataArray, getSiteItems,
-	getUptimeDetails, isObject, nestedValue, normalizeIndex, requestLegacy, requestUniFi, setKeyImage,
+	getUptimeDetails, isObject, nestedValue, normalizeIndex, setKeyImage,
 	stringField, ThroughputSettings, validColor
 } from "./live-throughput";
 
-const VIEWS = ["status", "performance", "network", "uptime"] as const;
+const VIEWS = ["performance", "network", "uptime"] as const;
+const VIEW_LAYOUT_VERSION = 2;
 const HOLD_MILLISECONDS = 700;
 const DEFAULT_BACKGROUND = "#17172b";
 const DEFAULT_ACCENT = "#20e3b2";
@@ -14,9 +17,22 @@ type DeviceMetricSettings = ThroughputSettings & {
 	deviceId?: string;
 	viewIndex?: number;
 	showIp?: boolean;
+	viewLayoutVersion?: number;
 };
 
 type DeviceRecord = Record<string, unknown>;
+
+async function migrateViewSettings(action: WillAppearEvent<DeviceMetricSettings>["action"], incoming: DeviceMetricSettings): Promise<DeviceMetricSettings> {
+	if (incoming.viewLayoutVersion === VIEW_LAYOUT_VERSION) return incoming;
+	const oldIndex = normalizeIndex(incoming.viewIndex, 4);
+	const settings = {
+		...incoming,
+		viewIndex: oldIndex <= 1 ? 0 : oldIndex - 1,
+		viewLayoutVersion: VIEW_LAYOUT_VERSION
+	};
+	await action.setSettings(withoutGlobalUniFiSettings(settings));
+	return settings;
+}
 
 @action({ UUID: "com.deadfrog-studios.ubiquitous.device-metrics" })
 export class DeviceMetrics extends SingletonAction<DeviceMetricSettings> {
@@ -26,11 +42,13 @@ export class DeviceMetrics extends SingletonAction<DeviceMetricSettings> {
 	readonly #dashboardUrls = new Map<string, string>();
 
 	override async onWillAppear(ev: WillAppearEvent<DeviceMetricSettings>): Promise<void> {
-		await this.#restart(ev.action.id, ev.payload.settings);
+		const settings = await migrateViewSettings(ev.action, ev.payload.settings);
+		await this.#restart(ev.action.id, settings);
 	}
 
 	override async onDidReceiveSettings(ev: DidReceiveSettingsEvent<DeviceMetricSettings>): Promise<void> {
-		await this.#restart(ev.action.id, ev.payload.settings);
+		const settings = await migrateViewSettings(ev.action, ev.payload.settings);
+		await this.#restart(ev.action.id, settings);
 	}
 
 	override onWillDisappear(ev: WillDisappearEvent<DeviceMetricSettings>): void {
@@ -44,43 +62,38 @@ export class DeviceMetrics extends SingletonAction<DeviceMetricSettings> {
 	override async onKeyUp(ev: KeyUpEvent<DeviceMetricSettings>): Promise<void> {
 		const heldFor = Date.now() - (this.#pressedAt.get(ev.action.id) ?? Date.now());
 		this.#pressedAt.delete(ev.action.id);
-		const settings = await ev.action.getSettings<DeviceMetricSettings>();
+		const settings = await withGlobalUniFiSettings(await ev.action.getSettings<DeviceMetricSettings>());
 		if (heldFor >= HOLD_MILLISECONDS) {
 			if (!settings.udmAddress || !settings.deviceId) return void await ev.action.showAlert();
 			await streamDeck.system.openUrl(this.#dashboardUrls.get(ev.action.id) ?? deviceDashboardUrl(settings));
 			return;
-		}
-		if (VIEWS[normalizeIndex(settings.viewIndex, VIEWS.length)] === "status") {
-			settings.showIp = !settings.showIp;
-			await ev.action.setSettings(settings);
-			await this.#refresh(ev.action.id);
 		}
 	}
 
 	override async onSendToPlugin(ev: SendToPluginEvent<DataSourceRequest, DeviceMetricSettings>): Promise<void> {
 		if (ev.payload.event !== "getSites" && ev.payload.event !== "getDevices") return;
 		try {
-			const settings = await ev.action.getSettings<DeviceMetricSettings>();
+			const settings = await withGlobalUniFiSettings(await ev.action.getSettings<DeviceMetricSettings>());
 			let items: DataSourceItem[];
 			if (ev.payload.event === "getSites") {
 				items = await getSiteItems(settings);
 				if (items.length && !items.some(({ value }) => value === settings.siteId)) {
 					settings.siteId = items[0].value;
 					settings.deviceId = undefined;
-					await ev.action.setSettings(settings);
+					await ev.action.setSettings(withoutGlobalUniFiSettings(settings));
 				}
 			} else {
 				if (!settings.siteId?.trim()) {
 					const sites = await getSiteItems(settings);
 					if (!sites.length) throw new Error("No sites found");
 					settings.siteId = sites[0].value;
-					await ev.action.setSettings(settings);
+					await ev.action.setSettings(withoutGlobalUniFiSettings(settings));
 				}
 				items = await getDeviceItems(settings);
 			}
 			if (ev.payload.event === "getDevices" && items.length && !items.some(({ value }) => value === settings.deviceId)) {
 				settings.deviceId = items[0].value;
-				await ev.action.setSettings(settings);
+				await ev.action.setSettings(withoutGlobalUniFiSettings(settings));
 			}
 			await streamDeck.ui.sendToPropertyInspector({ event: ev.payload.event, items });
 		} catch (error) {
@@ -111,7 +124,7 @@ export class DeviceMetrics extends SingletonAction<DeviceMetricSettings> {
 		if (!key?.isKey()) return;
 		this.#refreshing.add(contextId);
 		try {
-			const settings = await key.getSettings<DeviceMetricSettings>();
+			const settings = await withGlobalUniFiSettings(await key.getSettings<DeviceMetricSettings>());
 			if (!settings.udmAddress?.trim() || !settings.apiKey?.trim() || !settings.siteId?.trim() || !settings.deviceId?.trim()) {
 				await setKeyImage(key, renderMessage("CONFIGURE", "DEVICE", settings.backgroundColor));
 				return;
@@ -171,18 +184,10 @@ function renderDevice(view: typeof VIEWS[number], device: DeviceRecord, stats: D
 	const name = stringField(device, "name") || stringField(device, "model") || "DEVICE";
 	const background = validColor(settings.backgroundColor, DEFAULT_BACKGROUND);
 	const accent = validColor(settings.graphColor, DEFAULT_ACCENT);
-	if (view === "status") {
-		if (settings.showIp) {
-			const ip = firstString(device, ["ipAddress", "ip"]) || (legacy ? firstString(legacy, ["ip", "lan_ip"]) : "") || "NO IP";
-			return renderValueTile(name, "IP ADDRESS", ip, accent, background);
-		}
-		const online = deviceOnline(device, legacy);
-		return renderStatusTile(name, deviceType(device), online, background);
-	}
 	if (view === "performance") {
 		const cpu = optionalNumber([stats, legacy, device], ["cpuUtilizationPct", "cpuUtilization", "system-stats.cpu", "system_stats.cpu", "cpu"]);
 		const memory = optionalNumber([stats, legacy, device], ["memoryUtilizationPct", "memoryUtilization", "system-stats.mem", "system_stats.mem", "mem"]);
-		return renderPerformanceTile(name, cpu, memory, accent, background);
+		return renderPerformanceTile(name, cpu, memory, deviceOnline(device, legacy), background);
 	}
 	if (view === "network") {
 		const type = deviceType(device);
@@ -282,15 +287,31 @@ function heading(name: string): string {
 	return `<path d="${centeredTextPath(label, label.length > 15 ? 11 : label.length > 10 ? 14 : 17, 72, 34)}" fill="#fff"/>`;
 }
 
-function renderStatusTile(name: string, type: string, online: boolean, background: string): string {
-	const color = online ? "#12c892" : "#ff4057";
-	return frame(background, `${heading(name)}<path d="${centeredTextPath(type, type.length > 10 ? 12 : 15, 72, 52)}" fill="#fff"/><circle cx="72" cy="81" r="20" fill="${color}"/><path d="${centeredTextPath(online ? "ONLINE" : "OFFLINE", 17, 72, 119)}" fill="${color}"/>`);
+function renderPerformanceTile(name: string, cpu: number | undefined, memory: number | undefined, online: boolean, background: string): string {
+	const cpuText = cpu === undefined ? "—" : String(Math.round(cpu));
+	const memoryText = memory === undefined ? "—" : String(Math.round(memory));
+	const cpuColor = utilizationColor(cpu, 70, 85);
+	const memoryColor = utilizationColor(memory, 75, 90);
+	const cpuSize = cpuText.length > 2 ? 31 : 38;
+	const memorySize = memoryText.length > 2 ? 31 : 38;
+	const contents = [
+		`<path d="${centeredTextPath(name.toUpperCase(), name.length > 15 ? 11 : name.length > 10 ? 14 : 16, 72, 28)}" fill="#fff"/>`,
+		networkStatsIcon("cpu", "#fff", 18, 42, 28, 26),
+		`<path d="${centeredTextPath(cpuText, cpuSize, 80, 69)}" fill="${cpuColor}"/>`,
+		cpu === undefined ? "" : `<path d="${centeredTextPath("%", 22, 110, 56)}" fill="${cpuColor}"/>`,
+		networkStatsIcon("ram", "#fff", 18, 82, 28, 28),
+		`<path d="${centeredTextPath(memoryText, memorySize, 80, 109)}" fill="${memoryColor}"/>`,
+		memory === undefined ? "" : `<path d="${centeredTextPath("%", 22, 110, 96)}" fill="${memoryColor}"/>`,
+		`<circle cx="122.5" cy="124.5" r="8" fill="${online ? "#2fff00" : "#ff4057"}" stroke="#fff"/>`
+	].join("");
+	return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144"><rect width="144" height="144" fill="${background}"/>${contents}</svg>`;
 }
 
-function renderPerformanceTile(name: string, cpu: number | undefined, memory: number | undefined, accent: string, background: string): string {
-	const cpuText = cpu === undefined ? "—" : `${Math.round(cpu)}%`;
-	const memText = memory === undefined ? "—" : `${Math.round(memory)}%`;
-	return frame(background, `${heading(name)}<path d="${centeredTextPath("CPU", 13, 35, 58)}" fill="#fff"/><path d="${centeredTextPath("MEM", 13, 105, 58)}" fill="#fff"/><path d="${centeredTextPath(cpuText, 29, 35, 91)}" fill="${accent}"/><path d="${centeredTextPath(memText, 29, 105, 91)}" fill="${accent}"/><path d="${centeredTextPath("PERFORMANCE", 13, 72, 119)}" fill="#fff"/>`);
+function utilizationColor(value: number | undefined, amberAt: number, redAt: number): string {
+	if (value === undefined) return "#fff";
+	if (value >= redAt) return "#ff4057";
+	if (value >= amberAt) return "#c56200";
+	return "#2fff00";
 }
 
 function renderValueTile(name: string, label: string, value: string, accent: string, background: string): string {

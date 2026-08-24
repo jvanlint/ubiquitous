@@ -4,9 +4,9 @@
 	"Author": "Deadfrog Studios",
 	"Actions": [
 		{
-			"Name": "Network Stats",
+			"Name": "Network Metrics",
 			"UUID": "com.deadfrog-studios.ubiquitous.throughput",
-			"Icon": "imgs/actions/counter/icon",
+			"Icon": "imgs/actions/network_stats/network-wired-svgrepo-com",
 			"Tooltip": "Cycles through live UniFi network statistics. Hold an IP view to copy the address.",
 			"PropertyInspectorPath": "ui/live-throughput.html",
 			"Controllers": [
@@ -20,9 +20,9 @@
 			]
 		},
 		{
-			"Name": "Device Metrics",
+			"Name": "Unifi Device Metrics",
 			"UUID": "com.deadfrog-studios.ubiquitous.device-metrics",
-			"Icon": "imgs/actions/counter/icon",
+			"Icon": "imgs/actions/unifi_devices/network-switch-svgrepo-com",
 			"Tooltip": "Monitor a UniFi access point, switch, or gateway. Hold to open the device in UniFi.",
 			"PropertyInspectorPath": "ui/device-metrics.html",
 			"Controllers": [
@@ -36,9 +36,9 @@
 			]
 		},
 		{
-			"Name": "Client Metrics",
+			"Name": "Client Device Metrics",
 			"UUID": "com.deadfrog-studios.ubiquitous.client-metrics",
-			"Icon": "imgs/actions/counter/icon",
+			"Icon": "imgs/actions/client_devices/device-cloud-data-svgrepo-com",
 			"Tooltip": "Monitor an individual UniFi client or display connected-client summaries. Hold to open client details.",
 			"PropertyInspectorPath": "ui/client-metrics.html",
 			"Controllers": ["Keypad"],
@@ -51,7 +51,7 @@
 		}
 	],
 	"Category": "Ubiquitous",
-	"CategoryIcon": "imgs/plugin/category-icon",
+	"CategoryIcon": "imgs/plugin/network-topology-svgrepo-com",
 	"CodePath": "bin/plugin.js",
 	"Description": "A plugin for monitoring Ubiquiti networks and hardware.",
 	"Icon": "imgs/plugin/marketplace",

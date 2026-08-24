@@ -1,8 +1,9 @@
-import { request } from "node:https";
 import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { parse as parseFont } from "opentype.js";
 import streamDeck, { action, DidReceiveSettingsEvent, KeyDownEvent, KeyUpEvent, SendToPluginEvent, SingletonAction, WillAppearEvent, WillDisappearEvent } from "@elgato/streamdeck";
+import { requestLegacy, requestUniFi, UniFiApiSettings, withGlobalUniFiSettings, withoutGlobalUniFiSettings } from "../common/unifi-api";
+import { networkStatsIcon } from "../common/svg-icons";
 
 const DEFAULT_POLL_SECONDS = 5;
 const MIN_POLL_SECONDS = 1;
@@ -14,14 +15,12 @@ const VIEWS = ["throughput", "monthly_usage", "ip", "uptime", "isp_uptime", "lat
 const fontFile = readFileSync(new URL("../fonts/Play-Bold.ttf", import.meta.url));
 const PLAY_BOLD = parseFont(fontFile.buffer.slice(fontFile.byteOffset, fontFile.byteOffset + fontFile.byteLength));
 
-export type ThroughputSettings = {
-	udmAddress?: string;
-	apiKey?: string;
+export type ThroughputSettings = UniFiApiSettings & {
 	siteId?: string;
 	gatewayDeviceId?: string;
 	pollIntervalSeconds?: number;
-	allowSelfSignedCertificate?: boolean;
 	graphColor?: string;
+	monthlyUsageColor?: string;
 	backgroundColor?: string;
 	viewIndex?: number;
 	ipViewIndex?: number;
@@ -113,20 +112,20 @@ export class LiveThroughput extends SingletonAction<ThroughputSettings> {
 		if (event !== "getSites" && event !== "getGateways") return;
 
 		try {
-			const settings = await ev.action.getSettings<ThroughputSettings>();
+			const settings = await withGlobalUniFiSettings(await ev.action.getSettings<ThroughputSettings>());
 			const items = event === "getSites"
 				? await getSiteItems(settings)
 				: await getGatewayItems(settings, async (siteId) => {
 					settings.siteId = siteId;
 					settings.gatewayDeviceId = undefined;
-					await ev.action.setSettings(settings);
+					await ev.action.setSettings(withoutGlobalUniFiSettings(settings));
 				});
 			if (event === "getGateways" && items.length > 0
 				&& !items.some((item) => item.value === settings.gatewayDeviceId)) {
 				// sdpi-select displays its first data-source item when there is no
 				// persisted value, but that visual default is not saved automatically.
 				settings.gatewayDeviceId = items[0].value;
-				await ev.action.setSettings(settings);
+				await ev.action.setSettings(withoutGlobalUniFiSettings(settings));
 			}
 			await streamDeck.ui.sendToPropertyInspector({ event, items });
 		} catch (error) {
@@ -160,7 +159,7 @@ export class LiveThroughput extends SingletonAction<ThroughputSettings> {
 
 		this.#refreshing.add(contextId);
 		try {
-			const settings = await action.getSettings<ThroughputSettings>();
+			const settings = await withGlobalUniFiSettings(await action.getSettings<ThroughputSettings>());
 			if (!isConfigured(settings)) {
 				await setKeyImage(action, renderStatusSvg("CONFIGURE", "UNIFI", settings.graphColor, settings.backgroundColor));
 				return;
@@ -180,12 +179,18 @@ export class LiveThroughput extends SingletonAction<ThroughputSettings> {
 			const svg = display.throughput
 				? renderThroughputSvg(display.throughput, history, settings.graphColor, settings.backgroundColor)
 				: display.unit
-					? renderMonthlyDataSvg(display.value, display.unit, settings.graphColor, settings.backgroundColor)
+					? renderMonthlyDataSvg(display.value, display.unit, settings.monthlyUsageColor, settings.backgroundColor)
 					: display.uptimeDetails
 						? renderGatewayUptimeSvg(display.uptimeDetails, settings.graphColor, settings.backgroundColor)
 						: display.statusDetails
 							? renderNetworkStatusSvg(display.statusDetails, settings.backgroundColor)
-							: renderMetricSvg(display.label, display.value, history, display.accentColor ?? settings.graphColor, settings.backgroundColor);
+							: metric === "ip" && display.label === "WAN IP"
+								? renderWanIpSvg(display.value, settings.backgroundColor)
+								: metric === "isp_uptime"
+								? renderIspUptimeSvg(display.value, display.accentColor, settings.backgroundColor)
+									: metric === "latency"
+										? renderLatencySvg(display.value, display.accentColor, settings.backgroundColor)
+										: renderMetricSvg(display.label, display.value, history, display.accentColor ?? settings.graphColor, settings.backgroundColor);
 			await setKeyImage(action, svg);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -248,7 +253,7 @@ async function getMetricDisplay(metric: Metric, settings: ThroughputSettings): P
 	const wan = getWanHealth(await requestLegacy(settings, "/stat/health"));
 	if (metric === "isp_uptime") {
 		const availability = nestedNumber(wan, ["uptime_stats", "WAN", "availability"]);
-		return { label: "ISP UPTIME", value: `${Math.round(availability)}%`, accentColor: availability >= 99 ? "#35e06f" : availability >= 95 ? "#ffd23f" : "#ff4057" };
+		return { label: "WAN UPTIME", value: `${Math.round(availability)}%`, accentColor: availability >= 99 ? "#2fff00" : availability >= 95 ? "#ffd23f" : "#ff4057" };
 	}
 	if (metric === "latency") {
 		const latency = nestedNumber(wan, ["uptime_stats", "WAN", "latency_average"]);
@@ -262,67 +267,6 @@ async function getMetricDisplay(metric: Metric, settings: ThroughputSettings): P
 		accentColor: online ? "#35e06f" : "#ff4057",
 		statusDetails: { ispName, online }
 	};
-}
-
-export function requestUniFi(settings: ThroughputSettings, integrationPath: string): Promise<unknown> {
-	return requestUdm(settings, `/proxy/network/integration${integrationPath}`);
-}
-
-export function requestLegacy(settings: ThroughputSettings, path: string, method = "GET", payload?: object): Promise<unknown> {
-	return requestUdm(settings, `/proxy/network/api/s/default${path}`, method, payload);
-}
-
-function requestUdm(settings: ThroughputSettings, apiPath: string, method = "GET", payload?: object): Promise<unknown> {
-	if (!settings.udmAddress?.trim() || !settings.apiKey?.trim()) {
-		return Promise.reject(new Error("Enter the UDM address and API key first"));
-	}
-	const baseUrl = settings.udmAddress!.trim().match(/^https?:\/\//i)
-		? settings.udmAddress!.trim()
-		: `https://${settings.udmAddress!.trim()}`;
-	const url = new URL(baseUrl);
-	const [path, query = ""] = apiPath.split("?", 2);
-	url.pathname = path;
-	url.search = query;
-	url.hash = "";
-
-	if (url.protocol !== "https:") {
-		return Promise.reject(new Error("The UDM address must use HTTPS"));
-	}
-
-	return new Promise((resolve, reject) => {
-		const body = payload === undefined ? undefined : JSON.stringify(payload);
-		const req = request(url, {
-			method,
-			headers: {
-				Accept: "application/json",
-				"X-API-Key": settings.apiKey!.trim(),
-				...(body === undefined ? {} : { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) })
-			},
-			// Local UniFi consoles normally use a self-signed certificate. The PI's
-			// checked default is not persisted until the user changes it, so undefined
-			// must have the same meaning as the visually checked default.
-			rejectUnauthorized: settings.allowSelfSignedCertificate === false,
-			timeout: 10_000
-		}, (res) => {
-			let body = "";
-			res.setEncoding("utf8");
-			res.on("data", (chunk: string) => {
-				body += chunk;
-				if (body.length > 2_000_000) req.destroy(new Error("UniFi response was too large"));
-			});
-			res.on("end", () => {
-				if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
-					const detail = getErrorDetail(body);
-					reject(new Error(`UniFi returned HTTP ${res.statusCode ?? "unknown"}${detail ? `: ${detail}` : ""}`));
-					return;
-				}
-				try { resolve(JSON.parse(body)); } catch { reject(new Error("UniFi returned invalid JSON")); }
-			});
-		});
-		req.on("timeout", () => req.destroy(new Error("UniFi request timed out")));
-		req.on("error", reject);
-		req.end(body);
-	});
 }
 
 async function getMonthlyUsageBytes(settings: ThroughputSettings): Promise<number> {
@@ -348,7 +292,13 @@ export async function getSiteItems(settings: ThroughputSettings): Promise<DataSo
 }
 
 async function getGatewayItems(settings: ThroughputSettings, repairSiteId: (siteId: string) => Promise<void>): Promise<DataSourceItem[]> {
-	if (!settings.siteId?.trim()) throw new Error("Select a site first");
+	if (!settings.siteId?.trim()) {
+		const sites = await getSites(settings);
+		const siteIds = sites.map(getSiteUuid).filter(Boolean);
+		if (siteIds.length === 0) throw new Error("No sites found");
+		settings.siteId = siteIds[0];
+		await repairSiteId(settings.siteId);
+	}
 	if (!isUuid(settings.siteId)) {
 		const sites = await getSites(settings);
 		const siteIds = sites.map(getSiteUuid).filter(Boolean);
@@ -503,21 +453,6 @@ function copyToClipboard(value: string): Promise<void> {
 	});
 }
 
-function getErrorDetail(body: string): string {
-	try {
-		const parsed: unknown = JSON.parse(body);
-		if (isObject(parsed)) {
-			for (const field of ["message", "detail", "error", "errorCode"]) {
-				const value = parsed[field];
-				if (typeof value === "string" && value.trim()) return value.trim().slice(0, 180);
-			}
-		}
-	} catch {
-		// Ignore HTML error pages; they are not useful in the property inspector.
-	}
-	return "";
-}
-
 /** Supports current Integration API names plus legacy UniFi byte-rate field names. */
 function extractThroughput(value: unknown): Throughput {
 	const values = new Map<string, number>();
@@ -584,76 +519,177 @@ function renderMetricSvg(label: string, value: string, history: number[], reques
 }
 
 function renderThroughputSvg(throughput: Throughput, history: number[], requestedColor?: string, requestedBackground?: string): string {
-	const downloadColor = validColor(requestedColor);
-	const uploadColor = "#39b9ff";
-	const background = validColor(requestedBackground, DEFAULT_BACKGROUND_COLOR);
-	const graph = graphPaths(history);
-	const heading = centeredTextPath("THROUGHPUT", 15, 72, 34);
-	const download = centeredTextPath(formatMegabitsPerSecond(throughput.downloadBitsPerSecond), 33, 61, 76);
-	const upload = centeredTextPath(formatMegabitsPerSecond(throughput.uploadBitsPerSecond), 33, 61, 111);
-	const downUnit = centeredTextPath("Mb/s", 12, 109, 74);
-	const upUnit = centeredTextPath("Mb/s", 12, 109, 109);
+	void history;
+	void requestedColor;
+	const downloadColor = "#8d1af1";
+	const uploadColor = "#1a69f1";
+	const background = validColor(requestedBackground, "#1d1d1d");
+	const downloadRate = formatThroughputRate(throughput.downloadBitsPerSecond);
+	const uploadRate = formatThroughputRate(throughput.uploadBitsPerSecond);
+	const downloadUnitColor = throughputUnitColor(downloadRate.unit);
+	const uploadUnitColor = throughputUnitColor(uploadRate.unit);
+	const heading = centeredTextPath("THROUGHPUT", 16, 72, 28);
+	const download = fittedLeftTextPath(downloadRate.value, 38, 54, 68, 78);
+	const upload = fittedLeftTextPath(uploadRate.value, 38, 54, 119, 78);
+	const downloadUnit = centeredTextPath(downloadRate.unit, 16, 72, 83);
+	const uploadUnit = centeredTextPath(uploadRate.unit, 16, 72, 133);
 	return `
 <svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
-	<defs><clipPath id="face"><rect x="10" y="10" width="124" height="124" rx="23"/></clipPath></defs>
-	<rect x="10" y="10" width="124" height="124" rx="23" fill="${background}" stroke="#4b4b4d" stroke-width="5"/>
-	<g clip-path="url(#face)"><path d="${graph.area}" fill="${downloadColor}" fill-opacity=".16"/><path d="${graph.line}" fill="none" stroke="${downloadColor}" stroke-width="0.5"/></g>
+	<rect width="144" height="144" fill="${background}"/>
 	<path d="${heading}" fill="#fff"/>
-	<g fill="${downloadColor}"><rect x="20" y="54" width="4" height="13" rx="2"/><path d="M15 64 L22 73 L29 64 Z"/></g>
-	<g fill="${uploadColor}"><rect x="20" y="94" width="4" height="13" rx="2"/><path d="M15 97 L22 88 L29 97 Z"/></g>
-	<path d="${download}" fill="#fff" stroke="#08080a" stroke-width="0.5" paint-order="stroke"/>
-	<path d="${upload}" fill="#fff" stroke="#08080a" stroke-width="0.5" paint-order="stroke"/>
-	<path d="${downUnit}" fill="${downloadColor}"/><path d="${upUnit}" fill="${uploadColor}"/>
+	${networkStatsIcon("download", downloadColor, 17.667, 42.667, 26.666, 26.666)}
+	${networkStatsIcon("upload", uploadColor, 17.667, 93.667, 26.666, 26.666)}
+	<path d="${download}" fill="#fff"/>
+	<path d="${upload}" fill="#fff"/>
+	<path d="${downloadUnit}" fill="${downloadUnitColor}"/>
+	<path d="${uploadUnit}" fill="${uploadUnitColor}"/>
+</svg>`;
+}
+
+function formatThroughputRate(bitsPerSecond: number): { value: string; unit: "Mbps" | "Kbps" } {
+	const rate = Math.max(0, bitsPerSecond);
+	return rate >= 1_000_000
+		? { value: Math.round(rate / 1_000_000).toString(), unit: "Mbps" }
+		: { value: Math.round(rate / 1_000).toString(), unit: "Kbps" };
+}
+
+function throughputUnitColor(unit: "Mbps" | "Kbps"): string {
+	return unit === "Mbps" ? "#7fff00" : "#c56200";
+}
+
+function fittedLeftTextPath(text: string, maximumFontSize: number, x: number, baselineY: number, maximumWidth: number): string {
+	const initial = PLAY_BOLD.getPath(text, x, baselineY, maximumFontSize);
+	const box = initial.getBoundingBox();
+	const width = box.x2 - box.x1;
+	const fontSize = width > maximumWidth ? maximumFontSize * maximumWidth / width : maximumFontSize;
+	return PLAY_BOLD.getPath(text, x, baselineY, fontSize).toPathData(2);
+}
+
+function renderWanIpSvg(value: string, requestedBackground?: string): string {
+	const background = validColor(requestedBackground, "#000000");
+	const accent = "#ff00e1";
+	const heading = centeredTextPath("WAN IP", 16, 72, 28);
+	const lines = splitIpAddress(value) ?? [value, ""];
+	const firstLine = fittedCenteredTextPath(lines[0], 30, 72, 69, 116);
+	const secondLine = fittedCenteredTextPath(lines[1], 30, 72, 101, 116);
+	return `
+<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
+	<rect width="144" height="144" fill="${background}"/>
+	<path d="${heading}" fill="#fff"/>
+	<path d="${firstLine}" fill="${accent}"/>
+	${lines[1] ? `<path d="${secondLine}" fill="${accent}"/>` : ""}
 </svg>`;
 }
 
 function renderMonthlyDataSvg(value: string, unit: "GB" | "TB", requestedColor?: string, requestedBackground?: string): string {
-	const accent = validColor(requestedColor);
-	const background = validColor(requestedBackground, DEFAULT_BACKGROUND_COLOR);
-	const heading = centeredTextPath("WAN TOTAL", 16, 72, 42);
-	const valueSize = value.length >= 6 ? 43 : value.length >= 5 ? 49 : 57;
-	const valuePath = centeredTextPath(value, valueSize, 72, 91);
-	const unitPath = centeredTextPath(unit, 19, 72, 117);
+	const accent = validColor(requestedColor, "#c300ff");
+	const background = validColor(requestedBackground, "#1d1d1d");
+	const heading = centeredTextPath("WAN TOTAL", 16, 72, 28);
+	const valuePath = fittedCenteredTextPath(value, 60, 72, 89, 106);
+	const unitPath = centeredTextPath(unit, 24, 72, 119);
 	return `
 <svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
-	<rect x="10" y="10" width="124" height="124" rx="23" fill="${background}" stroke="#4b4b4d" stroke-width="5"/>
+	<rect width="144" height="144" fill="${background}"/>
 	<path d="${heading}" fill="#fff"/>
-	<path d="${valuePath}" fill="${accent}" stroke="#08080a" stroke-width="0.5" paint-order="stroke"/>
-	<path d="${unitPath}" fill="${accent}"/>
+	<path d="${valuePath}" fill="${accent}"/>
+	<path d="${unitPath}" fill="#fff"/>
 </svg>`;
 }
 
 function renderGatewayUptimeSvg(details: { days: number; hours: number; minutes: number }, requestedColor?: string, requestedBackground?: string): string {
-	const accent = validColor(requestedColor);
-	const background = validColor(requestedBackground, DEFAULT_BACKGROUND_COLOR);
-	const heading = centeredTextPath("GATEWAY UPTIME", 12, 72, 37);
+	void requestedColor;
+	const accent = "#ff00e1";
+	const background = validColor(requestedBackground, "#000000");
+	const gatewayHeading = centeredTextPath("GATEWAY", 16, 72, 26);
+	const uptimeHeading = centeredTextPath("UPTIME", 16, 72, 45);
 	const days = details.days.toString();
-	const valuePath = centeredTextPath(days, days.length >= 4 ? 43 : days.length >= 3 ? 50 : 58, 72, 82);
-	const daysPath = centeredTextPath("DAYS", 16, 72, 105);
-	const remainderPath = centeredTextPath(`${details.hours}h ${details.minutes}m`, 17, 72, 125);
+	const valuePath = fittedCenteredTextPath(days, 55, 72, 91, 90);
+	const daysPath = centeredTextPath("DAYS", 16, 72, 106);
+	const remainderPath = fittedCenteredTextPath(`${details.hours}h ${details.minutes}m`, 24, 72, 132, 100);
 	return `
 <svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
-	<rect x="10" y="10" width="124" height="124" rx="23" fill="${background}" stroke="#4b4b4d" stroke-width="5"/>
-	<path d="${heading}" fill="#fff"/>
-	<path d="${valuePath}" fill="${accent}" stroke="#08080a" stroke-width="0.5" paint-order="stroke"/>
+	<rect width="144" height="144" fill="${background}"/>
+	<path d="${gatewayHeading}" fill="#fff"/>
+	<path d="${uptimeHeading}" fill="#fff"/>
+	<path d="${valuePath}" fill="${accent}"/>
 	<path d="${daysPath}" fill="${accent}"/>
 	<path d="${remainderPath}" fill="#fff"/>
 </svg>`;
 }
 
 function renderNetworkStatusSvg(details: { ispName: string; online: boolean }, requestedBackground?: string): string {
-	const background = validColor(requestedBackground, DEFAULT_BACKGROUND_COLOR);
-	const statusColor = details.online ? "#12c892" : "#ff4057";
-	const headingSize = details.ispName.length >= 14 ? 13 : details.ispName.length >= 10 ? 16 : 20;
-	const heading = centeredTextPath(details.ispName, headingSize, 72, 42);
-	const status = centeredTextPath(details.online ? "ONLINE" : "OFFLINE", 18, 72, 119);
+	const background = validColor(requestedBackground, "#333333");
+	const statusColor = details.online ? "#09ff00" : "#ff4057";
+	const heading = fittedCenteredTextPath(details.ispName.toUpperCase(), 16, 72, 28, 108);
+	const status = centeredTextPath(details.online ? "ONLINE" : "OFFLINE", 18, 72, 126);
 	return `
 <svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
-	<rect x="10" y="10" width="124" height="124" rx="23" fill="${background}" stroke="#4b4b4d" stroke-width="5"/>
+	<rect width="144" height="144" fill="${background}"/>
 	<path d="${heading}" fill="#fff"/>
-	<circle cx="72" cy="76" r="21" fill="${statusColor}"/>
-	<path d="${status}" fill="${statusColor}"/>
+	<g fill="none" stroke="${statusColor}" stroke-width="3.37">
+		<rect x="44.485" y="44.685" width="56.03" height="19.099" rx="4.54"/>
+		<rect x="44.485" y="71.648" width="56.03" height="19.099" rx="4.54"/>
+		<path d="M72.5 91v15.8M53 109.283h39" stroke-width="4.494"/>
+	</g>
+	<rect x="52.84" y="50.862" width="5.898" height="6.741" fill="${statusColor}"/>
+	<rect x="52.84" y="77.825" width="5.898" height="6.741" fill="${statusColor}"/>
+	<circle cx="72.5" cy="109.283" r="4.6" fill="${statusColor}"/>
+	<path d="${status}" fill="${statusColor}" stroke="${background}" stroke-width="0.4" paint-order="stroke"/>
 </svg>`;
+}
+
+function renderIspUptimeSvg(value: string, requestedColor?: string, requestedBackground?: string): string {
+	const color = validColor(requestedColor, "#2fff00");
+	const background = validColor(requestedBackground, "#000000");
+	const heading = centeredTextPath("WAN UPTIME", 16, 72, 28);
+	const percentage = superscriptPercentagePaths(value.replace("%", ""));
+	return `
+<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
+	<rect width="144" height="144" fill="${background}"/>
+	<path d="${heading}" fill="#fff"/>
+	<path d="${percentage.value}" fill="${color}" stroke="#000" stroke-width="1" stroke-linejoin="round" paint-order="stroke"/>
+	<path d="${percentage.symbol}" fill="${color}" stroke="#000" stroke-width="1" stroke-linejoin="round" paint-order="stroke"/>
+</svg>`;
+}
+
+function superscriptPercentagePaths(value: string): { value: string; symbol: string } {
+	const valueSize = 48;
+	const symbolSize = 28.8;
+	const gap = 3.5;
+	const initialValue = PLAY_BOLD.getPath(value, 0, 89, valueSize);
+	const initialSymbol = PLAY_BOLD.getPath("%", 0, 73, symbolSize);
+	const valueBox = initialValue.getBoundingBox();
+	const symbolBox = initialSymbol.getBoundingBox();
+	const valueWidth = valueBox.x2 - valueBox.x1;
+	const symbolWidth = symbolBox.x2 - symbolBox.x1;
+	const left = 72 - (valueWidth + gap + symbolWidth) / 2;
+	const valueX = left - valueBox.x1;
+	const symbolX = left + valueWidth + gap - symbolBox.x1;
+	return {
+		value: PLAY_BOLD.getPath(value, valueX, 89, valueSize).toPathData(2),
+		symbol: PLAY_BOLD.getPath("%", symbolX, 73, symbolSize).toPathData(2)
+	};
+}
+
+function renderLatencySvg(value: string, requestedColor?: string, requestedBackground?: string): string {
+	const color = validColor(requestedColor, "#2fff00");
+	const background = validColor(requestedBackground, "#000000");
+	const heading = centeredTextPath("LATENCY", 16, 72, 28);
+	const valuePath = fittedCenteredTextPath(`${value}ms`, 48, 72, 89, 92);
+	return `
+<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
+	<rect width="144" height="144" fill="${background}"/>
+	<path d="${heading}" fill="#fff"/>
+	<path d="${valuePath}" fill="${color}" stroke="#000" stroke-width="1" stroke-linejoin="round" paint-order="stroke"/>
+</svg>`;
+}
+
+function fittedCenteredTextPath(text: string, maximumFontSize: number, centerX: number, baselineY: number, maximumWidth: number): string {
+	const initial = PLAY_BOLD.getPath(text, 0, baselineY, maximumFontSize);
+	const box = initial.getBoundingBox();
+	const width = box.x2 - box.x1;
+	const fontSize = width > maximumWidth ? maximumFontSize * maximumWidth / width : maximumFontSize;
+	return centeredTextPath(text, fontSize, centerX, baselineY);
 }
 
 function splitIpAddress(value: string): [string, string] | undefined {
@@ -692,10 +728,6 @@ function graphPaths(history: number[]): { area: string; line: string } {
 	});
 	const line = `M${points.join(" L")}`;
 	return { line, area: `M10 119 L${points.join(" L")} L134 119 Z` };
-}
-
-function formatMegabitsPerSecond(bitsPerSecond: number): string {
-	return Math.round(Math.max(0, bitsPerSecond) / 1_000_000).toString();
 }
 
 export function centeredTextPath(text: string, fontSize: number, centerX: number, baselineY: number): string {

@@ -1,7 +1,8 @@
 import streamDeck, { action, DidReceiveSettingsEvent, KeyDownEvent, KeyUpEvent, SendToPluginEvent, SingletonAction, WillAppearEvent, WillDisappearEvent } from "@elgato/streamdeck";
+import { requestLegacy, requestUniFi, withGlobalUniFiSettings, withoutGlobalUniFiSettings } from "../common/unifi-api";
 import {
 	centeredTextPath, DataSourceItem, getDataArray, getSiteItems, getUptimeDetails, isObject,
-	nestedValue, requestLegacy, requestUniFi, setKeyImage, stringField, ThroughputSettings, validColor
+	nestedValue, setKeyImage, stringField, ThroughputSettings, validColor
 } from "./live-throughput";
 
 const HOLD_MS = 700;
@@ -44,26 +45,26 @@ export class ClientMetrics extends SingletonAction<ClientSettings> {
 	override async onSendToPlugin(ev: SendToPluginEvent<ClientRequest, ClientSettings>): Promise<void> {
 		if (ev.payload.event !== "getSites" && ev.payload.event !== "getClients") return;
 		try {
-			const settings = await ev.action.getSettings<ClientSettings>();
+			const settings = await withGlobalUniFiSettings(await ev.action.getSettings<ClientSettings>());
 			let items: DataSourceItem[];
 			if (ev.payload.event === "getSites") {
 				items = await getSiteItems(settings);
 				if (items.length && !items.some(({ value }) => value === settings.siteId)) {
 					settings.siteId = items[0].value;
 					settings.clientId = undefined;
-					await ev.action.setSettings(settings);
+					await ev.action.setSettings(withoutGlobalUniFiSettings(settings));
 				}
 			} else {
 				if (!settings.siteId) {
 					const sites = await getSiteItems(settings);
 					if (!sites.length) throw new Error("No sites found");
 					settings.siteId = sites[0].value;
-					await ev.action.setSettings(settings);
+					await ev.action.setSettings(withoutGlobalUniFiSettings(settings));
 				}
 				items = await getClientItems(settings);
 				if (items.length && !items.some(({ value }) => value === settings.clientId)) {
 					settings.clientId = items[0].value;
-					await ev.action.setSettings(settings);
+					await ev.action.setSettings(withoutGlobalUniFiSettings(settings));
 				}
 			}
 			await streamDeck.ui.sendToPropertyInspector({ event: ev.payload.event, items });
@@ -88,7 +89,7 @@ export class ClientMetrics extends SingletonAction<ClientSettings> {
 		if (!key?.isKey()) return;
 		this.#refreshing.add(id);
 		try {
-			const settings = await key.getSettings<ClientSettings>();
+			const settings = await withGlobalUniFiSettings(await key.getSettings<ClientSettings>());
 			if (!configured(settings) || (settings.mode !== "summary" && !settings.clientId)) {
 				await setKeyImage(key, messageTile("CONFIGURE", "CLIENT", settings.backgroundColor));
 				return;
