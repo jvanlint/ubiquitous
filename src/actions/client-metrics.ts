@@ -6,8 +6,9 @@ import {
 } from "./live-throughput";
 
 const HOLD_MS = 700;
-const DEFAULT_BACKGROUND = "#17172b";
+const DEFAULT_BACKGROUND = "#000000";
 const DEFAULT_ACCENT = "#20e3b2";
+const CLIENT_HEADER = "#ff6200";
 const INDIVIDUAL_METRICS = ["speed", "experience", "usage", "signal", "connection", "channel", "retries", "uptime", "bandwidth"] as const;
 const SUMMARY_METRICS = ["total", "connection", "guest", "network"] as const;
 
@@ -20,6 +21,8 @@ type ClientSettings = ThroughputSettings & {
 };
 type RecordValue = Record<string, unknown>;
 type ClientRequest = { event?: string };
+type Bandwidth = { downBitsPerSecond: number; upBitsPerSecond: number };
+type BandwidthSample = { clientId: string; receivedBytes: number; transmittedBytes: number; sampledAt: number };
 
 @action({ UUID: "com.deadfrog-studios.ubiquitous.client-metrics" })
 export class ClientMetrics extends SingletonAction<ClientSettings> {
@@ -27,10 +30,11 @@ export class ClientMetrics extends SingletonAction<ClientSettings> {
 	readonly #refreshing = new Set<string>();
 	readonly #pressedAt = new Map<string, number>();
 	readonly #clientUrls = new Map<string, string>();
+	readonly #bandwidthSamples = new Map<string, BandwidthSample>();
 
 	override async onWillAppear(ev: WillAppearEvent<ClientSettings>): Promise<void> { await this.#restart(ev.action.id, ev.payload.settings); }
 	override async onDidReceiveSettings(ev: DidReceiveSettingsEvent<ClientSettings>): Promise<void> { await this.#restart(ev.action.id, ev.payload.settings); }
-	override onWillDisappear(ev: WillDisappearEvent<ClientSettings>): void { this.#stop(ev.action.id); }
+	override onWillDisappear(ev: WillDisappearEvent<ClientSettings>): void { this.#stop(ev.action.id); this.#bandwidthSamples.delete(ev.action.id); }
 	override onKeyDown(ev: KeyDownEvent<ClientSettings>): void { this.#pressedAt.set(ev.action.id, Date.now()); }
 
 	override async onKeyUp(ev: KeyUpEvent<ClientSettings>): Promise<void> {
@@ -97,18 +101,46 @@ export class ClientMetrics extends SingletonAction<ClientSettings> {
 			const legacyClients = await getLegacyClients(settings);
 			if (settings.mode === "summary") {
 				this.#clientUrls.delete(id);
+				this.#bandwidthSamples.delete(id);
 				await setKeyImage(key, renderSummary(legacyClients, Number(settings.summaryMetric) || 0, settings));
 				return;
 			}
 			const detail = unwrap(await requestUniFi(settings, `/v1/sites/${encodeURIComponent(settings.siteId!)}/clients/${encodeURIComponent(settings.clientId!)}`));
 			const legacy = matchLegacy(legacyClients, detail);
 			this.#clientUrls.set(id, clientUrl(settings, detail, legacy));
-			await setKeyImage(key, renderIndividual(detail, legacy, Number(settings.individualMetric) || 0, settings));
+			const bandwidth = this.#getBandwidth(id, settings.clientId!, detail, legacy);
+			await setKeyImage(key, renderIndividual(detail, legacy, Number(settings.individualMetric) || 0, settings, bandwidth));
 		} catch (error) {
 			console.error(`Unable to update Client Metrics ${id}: ${error instanceof Error ? error.message : String(error)}`);
 			await setKeyImage(key, messageTile("CLIENT", "ERROR"));
 			await key.showAlert();
 		} finally { this.#refreshing.delete(id); }
+	}
+
+	#getBandwidth(id: string, clientId: string, detail: RecordValue, legacy?: RecordValue): Bandwidth {
+		const records = [legacy, detail];
+		const downBits = positiveNumber(records, ["downlinkRateBps", "rxRateBps", "rx_rate_bps"]);
+		const upBits = positiveNumber(records, ["uplinkRateBps", "txRateBps", "tx_rate_bps"]);
+		const downBytes = positiveNumber(records, ["rx_bytes-r", "rx_bytes_r", "rxRateBytesPerSecond"]);
+		const upBytes = positiveNumber(records, ["tx_bytes-r", "tx_bytes_r", "txRateBytesPerSecond"]);
+		const receivedBytes = optionalNumber(records, ["rxBytes", "rx_bytes"]);
+		const transmittedBytes = optionalNumber(records, ["txBytes", "tx_bytes"]);
+		const now = Date.now();
+		const previous = this.#bandwidthSamples.get(id);
+		let derivedDown = 0;
+		let derivedUp = 0;
+		if (previous?.clientId === clientId && receivedBytes !== undefined && transmittedBytes !== undefined) {
+			const elapsedSeconds = Math.max(0.001, (now - previous.sampledAt) / 1000);
+			derivedDown = Math.max(0, receivedBytes - previous.receivedBytes) * 8 / elapsedSeconds;
+			derivedUp = Math.max(0, transmittedBytes - previous.transmittedBytes) * 8 / elapsedSeconds;
+		}
+		if (receivedBytes !== undefined && transmittedBytes !== undefined) {
+			this.#bandwidthSamples.set(id, { clientId, receivedBytes, transmittedBytes, sampledAt: now });
+		}
+		return {
+			downBitsPerSecond: downBits ?? (downBytes === undefined ? derivedDown : downBytes * 8),
+			upBitsPerSecond: upBits ?? (upBytes === undefined ? derivedUp : upBytes * 8)
+		};
 	}
 }
 
@@ -154,7 +186,7 @@ function matchLegacy(clients: RecordValue[], detail: RecordValue): RecordValue |
 		?? clients.find((client) => firstString(client, ["ip", "ipAddress"]) === ip && ip);
 }
 
-function renderIndividual(detail: RecordValue, legacy: RecordValue | undefined, metricIndex: number, settings: ClientSettings): string {
+function renderIndividual(detail: RecordValue, legacy: RecordValue | undefined, metricIndex: number, settings: ClientSettings, bandwidth: Bandwidth): string {
 	const metric = INDIVIDUAL_METRICS[((metricIndex % INDIVIDUAL_METRICS.length) + INDIVIDUAL_METRICS.length) % INDIVIDUAL_METRICS.length];
 	const records = [detail, legacy];
 	const name = clientName(detail, legacy);
@@ -177,8 +209,7 @@ function renderIndividual(detail: RecordValue, legacy: RecordValue | undefined, 
 	}
 	if (metric === "signal") {
 		const signal = optionalNumber(records, ["signalDbm", "signal", "rssi"]);
-		const color = signal === undefined ? accent : signal >= -60 ? "#12c892" : signal >= -75 ? "#ffd23f" : "#ff4057";
-		return valueTile(name, "SIGNAL", signal === undefined ? "—" : String(Math.round(signal)), "dBm", color, background);
+		return wifiStandardTile(name, wifiGeneration(records), signal, background);
 	}
 	if (metric === "connection") {
 		const point = firstFrom(records, ["accessPointName", "connectedDeviceName", "ap_name", "sw_name", "hostname"]) || "UNKNOWN";
@@ -196,9 +227,7 @@ function renderIndividual(detail: RecordValue, legacy: RecordValue | undefined, 
 		const seconds = optionalNumber(records, ["uptimeSec", "uptime", "connectedAt"]);
 		return uptimeTile(name, seconds ?? 0, accent, background);
 	}
-	const down = optionalNumber(records, ["downlinkRateBps", "rxRateBps", "rx_bytes-r", "rx_bytes_r"]) ?? 0;
-	const up = optionalNumber(records, ["uplinkRateBps", "txRateBps", "tx_bytes-r", "tx_bytes_r"]) ?? 0;
-	return bandwidthTile(name, normalizeBps(down), normalizeBps(up), accent, background);
+	return bandwidthTile(name, bandwidth.downBitsPerSecond, bandwidth.upBitsPerSecond, accent, background);
 }
 
 function renderSummary(clients: RecordValue[], metricIndex: number, settings: ClientSettings): string {
@@ -228,11 +257,24 @@ function clientName(primary: RecordValue, fallback?: RecordValue): string {
 function firstString(record: RecordValue, fields: string[]): string { for (const field of fields) { const value = nestedValue(record, field.split(".")); if (typeof value === "string" && value) return value; } return ""; }
 function firstFrom(records: Array<RecordValue | undefined>, fields: string[]): string { for (const record of records) { if (record) { const value = firstString(record, fields); if (value) return value; } } return ""; }
 function optionalNumber(records: Array<RecordValue | undefined>, fields: string[]): number | undefined { for (const record of records) { if (!record) continue; for (const field of fields) { const value = nestedValue(record, field.split(".")); if (typeof value === "number" && Number.isFinite(value)) return value; } } return undefined; }
+function positiveNumber(records: Array<RecordValue | undefined>, fields: string[]): number | undefined { for (const record of records) { if (!record) continue; for (const field of fields) { const value = nestedValue(record, field.split(".")); if (typeof value === "number" && Number.isFinite(value) && value > 0) return value; } } return undefined; }
 function normalizeMac(value: string): string { return value.replace(/[^a-f0-9]/gi, "").toLowerCase(); }
 function normalizeRateMbps(value: number): number { return value > 100_000 ? value / 1_000_000 : value > 10_000 ? value / 1000 : value; }
-function normalizeBps(value: number): number { return Math.max(0, value < 100_000 ? value * 8 : value); }
 function isWired(client: RecordValue): boolean { return client.is_wired === true || client.isWired === true || /wired/i.test(firstString(client, ["type", "connectionType"])); }
 function isGuest(client: RecordValue): boolean { return client.is_guest === true || client.isGuest === true || /guest/i.test(firstString(client, ["network", "essid"])); }
+
+function wifiGeneration(records: Array<RecordValue | undefined>): string {
+	if (records.some((record) => record && isWired(record))) return "WIRED";
+	const protocol = firstFrom(records, ["wifiStandard", "wifi_standard", "radioProtocol", "radio_proto", "radioProto", "phyMode", "phy_mode", "protocol"]).toLowerCase();
+	const band = firstFrom(records, ["radioBand", "radio_band", "band", "frequencyBand", "frequency_band", "radio.name", "radio_name"]).toLowerCase();
+	const frequency = optionalNumber(records, ["frequencyMHz", "frequency_mhz", "frequency", "radio.frequencyMHz", "radio.frequency"]);
+	const sixGhz = /6\s*ghz|6e/.test(band) || (frequency !== undefined && frequency >= 5925);
+	if (/(?:802\.11|11)?be\b/.test(protocol)) return "7";
+	if (/(?:802\.11|11)?ax\b/.test(protocol)) return sixGhz ? "6E" : "6";
+	if (/(?:802\.11|11)?ac\b/.test(protocol)) return "5";
+	if (/(?:802\.11|11)?n\b/.test(protocol) || /\b(?:ng|na)\b/.test(protocol)) return "4";
+	return "?";
+}
 
 function clientUrl(settings: ClientSettings, detail: RecordValue, legacy?: RecordValue): string {
 	const raw = settings.udmAddress!.trim();
@@ -248,12 +290,41 @@ function formatBytes(bytes: number): { value: string; unit: string } {
 	if (bytes >= 1e9) return { value: (bytes / 1e9).toFixed(1), unit: "GB" };
 	return { value: (bytes / 1e6).toFixed(1), unit: "MB" };
 }
-function shell(background: string, body: string): string { return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144"><rect x="10" y="10" width="124" height="124" rx="23" fill="${background}" stroke="#4b4b4d" stroke-width="5"/>${body}</svg>`; }
-function heading(name: string): string { const text = name.toUpperCase(); return `<path d="${centeredTextPath(text, text.length > 16 ? 10 : text.length > 11 ? 13 : 16, 72, 34)}" fill="#fff"/>`; }
+function shell(_background: string, body: string): string { return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144"><rect width="144" height="144" fill="#000"/>${body}</svg>`; }
+function heading(name: string): string { const text = name.toUpperCase(); return `<rect width="144" height="35" fill="${CLIENT_HEADER}"/><path d="${centeredTextPath(text, text.length > 16 ? 10 : text.length > 11 ? 13 : 16, 72, 26)}" fill="#fff"/>`; }
 function valueTile(name: string, label: string, value: string, unit: string, accent: string, background: string): string { const size = value.length > 6 ? 35 : 54; return shell(background, `${heading(name)}<path d="${centeredTextPath(label, 14, 72, 54)}" fill="#fff"/><path d="${centeredTextPath(value, size, 72, 101)}" fill="${accent}" stroke="#08080a" stroke-width=".5" paint-order="stroke"/>${unit ? `<path d="${centeredTextPath(unit, 14, 72, 121)}" fill="${accent}"/>` : ""}`); }
 function textTile(name: string, label: string, value: string, accent: string, background: string): string { const size = value.length > 16 ? 12 : value.length > 11 ? 16 : 22; return shell(background, `${heading(name)}<path d="${centeredTextPath(label, 14, 72, 58)}" fill="#fff"/><path d="${centeredTextPath(value.toUpperCase(), size, 72, 96)}" fill="${accent}"/>`); }
 function uptimeTile(name: string, seconds: number, accent: string, background: string): string { const value = getUptimeDetails(seconds); return shell(background, `${heading(name)}<path d="${centeredTextPath(String(value.days), 49, 72, 82)}" fill="${accent}"/><path d="${centeredTextPath("DAYS", 14, 72, 103)}" fill="${accent}"/><path d="${centeredTextPath(`${value.hours}h ${value.minutes}m`, 16, 72, 123)}" fill="#fff"/>`); }
-function bandwidthTile(name: string, down: number, up: number, accent: string, background: string): string { const downText = String(Math.round(down / 1e6)); const upText = String(Math.round(up / 1e6)); return shell(background, `${heading(name)}<path d="${centeredTextPath("↓", 20, 25, 72)}" fill="${accent}"/><path d="${centeredTextPath(downText, 30, 67, 73)}" fill="#fff"/><path d="${centeredTextPath("↑", 20, 25, 108)}" fill="#39b9ff"/><path d="${centeredTextPath(upText, 30, 67, 109)}" fill="#fff"/><path d="${centeredTextPath("Mb/s", 12, 111, 91)}" fill="#fff"/>`); }
+function wifiStandardTile(name: string, generation: string, signal: number | undefined, background: string): string {
+	if (generation === "WIRED") return textTile(name, "CONNECTION", "WIRED", CLIENT_HEADER, background);
+	const color = signal === undefined ? "#fff" : signal >= -60 ? "#2fff00" : signal >= -70 ? "#ff7b00" : "#ff4057";
+	const filledBars = signal === undefined ? 0 : signal >= -55 ? 4 : signal >= -65 ? 3 : signal >= -75 ? 2 : signal >= -85 ? 1 : 0;
+	const bars = [
+		{ x: 80.75, y: 71.75, height: 16.875 },
+		{ x: 95.75, y: 61.625, height: 27 },
+		{ x: 110.75, y: 51.5, height: 37.125 },
+		{ x: 125.75, y: 41.375, height: 47.25 }
+	].map(({ x, y, height }, index) => `<rect x="${x}" y="${y}" width="7.5" height="${height}" fill="${index < filledBars ? color : "#505050"}"/>`).join("");
+	const wifi = `<g fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round"><path d="M13 68a25 25 0 0 1 25 25"/><path d="M13 77a16 16 0 0 1 16 16"/><path d="M13 86a7 7 0 0 1 7 7"/></g><circle cx="13" cy="93" r="3" fill="#fff"/>`;
+	const badgeSize = generation.length > 1 ? 13 : 23;
+	const badge = `<circle cx="49" cy="58" r="14" fill="#d9d9d9"/><path d="${centeredTextPath(generation, badgeSize, 49, generation.length > 1 ? 63 : 66)}" fill="#000"/>`;
+	const value = signal === undefined ? "—" : `${Math.round(signal)} dBm`;
+	return shell(background, `${heading(name)}${wifi}${badge}${bars}<path d="${centeredTextPath(value, 24, 72, 127)}" fill="${color}"/>`);
+}
+function bandwidthTile(name: string, down: number, up: number, accent: string, background: string): string {
+	const download = formatBandwidth(down);
+	const upload = formatBandwidth(up);
+	return shell(background, `${heading(name)}<path d="${centeredTextPath("↓", 20, 25, 72)}" fill="${accent}"/><path d="${centeredTextPath(download.value, 30, 67, 73)}" fill="#fff"/><path d="${centeredTextPath(download.unit, 11, 111, 73)}" fill="#fff"/><path d="${centeredTextPath("↑", 20, 25, 108)}" fill="#39b9ff"/><path d="${centeredTextPath(upload.value, 30, 67, 109)}" fill="#fff"/><path d="${centeredTextPath(upload.unit, 11, 111, 109)}" fill="#fff"/>`);
+}
+
+function formatBandwidth(bitsPerSecond: number): { value: string; unit: "Mb/s" | "Kb/s" } {
+	const rate = Math.max(0, bitsPerSecond);
+	if (rate >= 1_000_000) {
+		const mbps = rate / 1_000_000;
+		return { value: mbps < 10 ? mbps.toFixed(1) : String(Math.round(mbps)), unit: "Mb/s" };
+	}
+	return { value: String(Math.round(rate / 1000)), unit: "Kb/s" };
+}
 function splitTile(title: string, leftLabel: string, left: number, rightLabel: string, right: number, accent: string, background: string): string { return shell(background, `${heading(title)}<path d="${centeredTextPath(leftLabel, 11, 38, 59)}" fill="#fff"/><path d="${centeredTextPath(rightLabel, 11, 104, 59)}" fill="#fff"/><path d="${centeredTextPath(String(left), 37, 38, 101)}" fill="${accent}"/><path d="${centeredTextPath(String(right), 37, 104, 101)}" fill="#39b9ff"/>`); }
 function networkTile(networks: Array<[string, number]>, accent: string, background: string): string { const rows = networks.length ? networks : [["NO CLIENTS", 0] as [string, number]]; return shell(background, `${heading("BY NETWORK")}${rows.map(([name, count], index) => { const y = 62 + index * 28; const clipped = name.length > 12 ? `${name.slice(0, 11)}…` : name; return `<path d="${centeredTextPath(clipped.toUpperCase(), 12, 52, y)}" fill="#fff"/><path d="${centeredTextPath(String(count), 22, 108, y)}" fill="${accent}"/>`; }).join("")}`); }
 function messageTile(top: string, bottom: string, requestedBackground?: string): string { const background = validColor(requestedBackground, DEFAULT_BACKGROUND); return shell(background, `<path d="${centeredTextPath(top, 20, 72, 67)}" fill="#fff"/><path d="${centeredTextPath(bottom, 20, 72, 94)}" fill="#fff"/>`); }

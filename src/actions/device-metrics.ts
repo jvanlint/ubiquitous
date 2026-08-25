@@ -10,8 +10,8 @@ import {
 const VIEWS = ["performance", "network", "uptime"] as const;
 const VIEW_LAYOUT_VERSION = 2;
 const HOLD_MILLISECONDS = 700;
-const DEFAULT_BACKGROUND = "#17172b";
-const DEFAULT_ACCENT = "#20e3b2";
+const DEFAULT_BACKGROUND = "#000000";
+const DEVICE_HEADER = "#0063e8";
 
 type DeviceMetricSettings = ThroughputSettings & {
 	deviceId?: string;
@@ -183,7 +183,6 @@ function matchLegacyDevice(response: unknown, device: DeviceRecord): DeviceRecor
 function renderDevice(view: typeof VIEWS[number], device: DeviceRecord, stats: DeviceRecord, legacy: DeviceRecord | undefined, settings: DeviceMetricSettings): string {
 	const name = stringField(device, "name") || stringField(device, "model") || "DEVICE";
 	const background = validColor(settings.backgroundColor, DEFAULT_BACKGROUND);
-	const accent = validColor(settings.graphColor, DEFAULT_ACCENT);
 	if (view === "performance") {
 		const cpu = optionalNumber([stats, legacy, device], ["cpuUtilizationPct", "cpuUtilization", "system-stats.cpu", "system_stats.cpu", "cpu"]);
 		const memory = optionalNumber([stats, legacy, device], ["memoryUtilizationPct", "memoryUtilization", "system-stats.mem", "system_stats.mem", "mem"]);
@@ -193,10 +192,10 @@ function renderDevice(view: typeof VIEWS[number], device: DeviceRecord, stats: D
 		const type = deviceType(device);
 		const isSwitch = type === "SWITCH";
 		const value = isSwitch ? activePortCount(stats, legacy) : clientCount(stats, legacy);
-		return renderValueTile(name, isSwitch ? "ACTIVE PORTS" : "CLIENTS", value === undefined ? "—" : String(value), accent, background);
+		return renderValueTile(name, isSwitch ? "ACTIVE PORTS" : "CLIENTS", value === undefined ? "—" : String(value), background);
 	}
 	const seconds = optionalNumber([stats, legacy, device], ["uptimeSec", "uptime"]);
-	return renderUptimeTile(name, seconds ?? 0, accent, background);
+	return renderUptimeTile(name, seconds ?? 0, background);
 }
 
 function deviceType(device: DeviceRecord): string {
@@ -284,7 +283,8 @@ function frame(background: string, contents: string): string {
 
 function heading(name: string): string {
 	const label = name.toUpperCase();
-	return `<path d="${centeredTextPath(label, label.length > 15 ? 11 : label.length > 10 ? 14 : 17, 72, 34)}" fill="#fff"/>`;
+	const path = centeredTextPath(label, label.length > 15 ? 11 : label.length > 10 ? 14 : 16, 72, 26);
+	return `<rect width="144" height="35" fill="${DEVICE_HEADER}"/><path d="${path}" fill="#fff"/>`;
 }
 
 function renderPerformanceTile(name: string, cpu: number | undefined, memory: number | undefined, online: boolean, background: string): string {
@@ -295,13 +295,13 @@ function renderPerformanceTile(name: string, cpu: number | undefined, memory: nu
 	const cpuSize = cpuText.length > 2 ? 31 : 38;
 	const memorySize = memoryText.length > 2 ? 31 : 38;
 	const contents = [
-		`<path d="${centeredTextPath(name.toUpperCase(), name.length > 15 ? 11 : name.length > 10 ? 14 : 16, 72, 28)}" fill="#fff"/>`,
-		networkStatsIcon("cpu", "#fff", 18, 42, 28, 26),
-		`<path d="${centeredTextPath(cpuText, cpuSize, 80, 69)}" fill="${cpuColor}"/>`,
-		cpu === undefined ? "" : `<path d="${centeredTextPath("%", 22, 110, 56)}" fill="${cpuColor}"/>`,
-		networkStatsIcon("ram", "#fff", 18, 82, 28, 28),
-		`<path d="${centeredTextPath(memoryText, memorySize, 80, 109)}" fill="${memoryColor}"/>`,
-		memory === undefined ? "" : `<path d="${centeredTextPath("%", 22, 110, 96)}" fill="${memoryColor}"/>`,
+		heading(name),
+		networkStatsIcon("cpu", "#fff", 18, 50, 28, 26),
+		`<path d="${centeredTextPath(cpuText, cpuSize, 75, 74)}" fill="${cpuColor}"/>`,
+		cpu === undefined ? "" : `<path d="${centeredTextPath("%", 22, 106, 61)}" fill="${cpuColor}"/>`,
+		networkStatsIcon("ram", "#fff", 18, 91, 28, 26),
+		`<path d="${centeredTextPath(memoryText, memorySize, 75, 115)}" fill="${memoryColor}"/>`,
+		memory === undefined ? "" : `<path d="${centeredTextPath("%", 22, 106, 102)}" fill="${memoryColor}"/>`,
 		`<circle cx="122.5" cy="124.5" r="8" fill="${online ? "#2fff00" : "#ff4057"}" stroke="#fff"/>`
 	].join("");
 	return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144"><rect width="144" height="144" fill="${background}"/>${contents}</svg>`;
@@ -310,19 +310,20 @@ function renderPerformanceTile(name: string, cpu: number | undefined, memory: nu
 function utilizationColor(value: number | undefined, amberAt: number, redAt: number): string {
 	if (value === undefined) return "#fff";
 	if (value >= redAt) return "#ff4057";
-	if (value >= amberAt) return "#c56200";
+	if (value >= amberAt) return "#ff7b00";
 	return "#2fff00";
 }
 
-function renderValueTile(name: string, label: string, value: string, accent: string, background: string): string {
+function renderValueTile(name: string, label: string, value: string, background: string): string {
 	const isIp = value.includes(".") || value.includes(":");
-	const size = isIp ? (value.length > 15 ? 13 : 18) : value.length > 5 ? 39 : 57;
-	return frame(background, `${heading(name)}<path d="${centeredTextPath(label, 14, 72, 55)}" fill="#fff"/><path d="${centeredTextPath(value, size, 72, 100)}" fill="${accent}" stroke="#08080a" stroke-width="0.5" paint-order="stroke"/>`);
+	const size = isIp ? (value.length > 15 ? 13 : 18) : value.length > 5 ? 39 : 51;
+	const labelSize = label.length > 9 ? 17 : 24;
+	return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144"><rect width="144" height="144" fill="${background}"/>${heading(name)}<path d="${centeredTextPath(value, size, 72, 88)}" fill="${DEVICE_HEADER}"/><path d="${centeredTextPath(label, labelSize, 72, 126)}" fill="#fff"/></svg>`;
 }
 
-function renderUptimeTile(name: string, seconds: number, accent: string, background: string): string {
+function renderUptimeTile(name: string, seconds: number, background: string): string {
 	const value = getUptimeDetails(seconds);
-	return frame(background, `${heading(name)}<path d="${centeredTextPath(String(value.days), 52, 72, 82)}" fill="${accent}"/><path d="${centeredTextPath("DAYS", 15, 72, 104)}" fill="${accent}"/><path d="${centeredTextPath(`${value.hours}h ${value.minutes}m`, 16, 72, 124)}" fill="#fff"/>`);
+	return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144"><rect width="144" height="144" fill="${background}"/>${heading(name)}<path d="${centeredTextPath(String(value.days), 52, 72, 88)}" fill="${DEVICE_HEADER}"/><path d="${centeredTextPath("DAYS", 15, 72, 103)}" fill="#88bbff"/><path d="${centeredTextPath(`${value.hours}h ${value.minutes}m`, 24, 72, 128)}" fill="#fff"/></svg>`;
 }
 
 function renderMessage(top: string, bottom: string, requestedBackground?: string): string {

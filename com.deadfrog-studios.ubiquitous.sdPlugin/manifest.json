@@ -41,7 +41,9 @@
 			"Icon": "imgs/actions/client_devices/device-cloud-data-svgrepo-com",
 			"Tooltip": "Monitor an individual UniFi client or display connected-client summaries. Hold to open client details.",
 			"PropertyInspectorPath": "ui/client-metrics.html",
-			"Controllers": ["Keypad"],
+			"Controllers": [
+				"Keypad"
+			],
 			"States": [
 				{
 					"Image": "imgs/actions/counter/blank",

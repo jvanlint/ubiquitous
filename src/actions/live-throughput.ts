@@ -9,6 +9,7 @@ const DEFAULT_POLL_SECONDS = 5;
 const MIN_POLL_SECONDS = 1;
 const DEFAULT_GRAPH_COLOR = "#20e3b2";
 const DEFAULT_BACKGROUND_COLOR = "#17172b";
+const NETWORK_METRIC_HEADER = "#c800ff";
 const HISTORY_LENGTH = 32;
 const HOLD_MILLISECONDS = 700;
 const VIEWS = ["throughput", "monthly_usage", "ip", "uptime", "isp_uptime", "latency", "status"] as const;
@@ -528,7 +529,6 @@ function renderThroughputSvg(throughput: Throughput, history: number[], requeste
 	const uploadRate = formatThroughputRate(throughput.uploadBitsPerSecond);
 	const downloadUnitColor = throughputUnitColor(downloadRate.unit);
 	const uploadUnitColor = throughputUnitColor(uploadRate.unit);
-	const heading = centeredTextPath("THROUGHPUT", 16, 72, 28);
 	const download = fittedLeftTextPath(downloadRate.value, 38, 54, 68, 78);
 	const upload = fittedLeftTextPath(uploadRate.value, 38, 54, 119, 78);
 	const downloadUnit = centeredTextPath(downloadRate.unit, 16, 72, 83);
@@ -536,7 +536,7 @@ function renderThroughputSvg(throughput: Throughput, history: number[], requeste
 	return `
 <svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
 	<rect width="144" height="144" fill="${background}"/>
-	<path d="${heading}" fill="#fff"/>
+	${networkMetricHeader("THROUGHPUT")}
 	${networkStatsIcon("download", downloadColor, 17.667, 42.667, 26.666, 26.666)}
 	${networkStatsIcon("upload", uploadColor, 17.667, 93.667, 26.666, 26.666)}
 	<path d="${download}" fill="#fff"/>
@@ -567,30 +567,28 @@ function fittedLeftTextPath(text: string, maximumFontSize: number, x: number, ba
 
 function renderWanIpSvg(value: string, requestedBackground?: string): string {
 	const background = validColor(requestedBackground, "#000000");
-	const accent = "#ff00e1";
-	const heading = centeredTextPath("WAN IP", 16, 72, 28);
+	const accent = NETWORK_METRIC_HEADER;
 	const lines = splitIpAddress(value) ?? [value, ""];
 	const firstLine = fittedCenteredTextPath(lines[0], 30, 72, 69, 116);
 	const secondLine = fittedCenteredTextPath(lines[1], 30, 72, 101, 116);
 	return `
 <svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
 	<rect width="144" height="144" fill="${background}"/>
-	<path d="${heading}" fill="#fff"/>
+	${networkMetricHeader("WAN IP")}
 	<path d="${firstLine}" fill="${accent}"/>
 	${lines[1] ? `<path d="${secondLine}" fill="${accent}"/>` : ""}
 </svg>`;
 }
 
 function renderMonthlyDataSvg(value: string, unit: "GB" | "TB", requestedColor?: string, requestedBackground?: string): string {
-	const accent = validColor(requestedColor, "#c300ff");
-	const background = validColor(requestedBackground, "#1d1d1d");
-	const heading = centeredTextPath("WAN TOTAL", 16, 72, 28);
+	const accent = validColor(requestedColor, NETWORK_METRIC_HEADER);
+	const background = validColor(requestedBackground, "#000000");
 	const valuePath = fittedCenteredTextPath(value, 60, 72, 89, 106);
-	const unitPath = centeredTextPath(unit, 24, 72, 119);
+	const unitPath = centeredTextPath(unit, 24, 72, 115);
 	return `
 <svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
 	<rect width="144" height="144" fill="${background}"/>
-	<path d="${heading}" fill="#fff"/>
+	${networkMetricHeader("WAN TOTAL")}
 	<path d="${valuePath}" fill="${accent}"/>
 	<path d="${unitPath}" fill="#fff"/>
 </svg>`;
@@ -598,10 +596,8 @@ function renderMonthlyDataSvg(value: string, unit: "GB" | "TB", requestedColor?:
 
 function renderGatewayUptimeSvg(details: { days: number; hours: number; minutes: number }, requestedColor?: string, requestedBackground?: string): string {
 	void requestedColor;
-	const accent = "#ff00e1";
+	const accent = NETWORK_METRIC_HEADER;
 	const background = validColor(requestedBackground, "#000000");
-	const gatewayHeading = centeredTextPath("GATEWAY", 16, 72, 26);
-	const uptimeHeading = centeredTextPath("UPTIME", 16, 72, 45);
 	const days = details.days.toString();
 	const valuePath = fittedCenteredTextPath(days, 55, 72, 91, 90);
 	const daysPath = centeredTextPath("DAYS", 16, 72, 106);
@@ -609,8 +605,7 @@ function renderGatewayUptimeSvg(details: { days: number; hours: number; minutes:
 	return `
 <svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
 	<rect width="144" height="144" fill="${background}"/>
-	<path d="${gatewayHeading}" fill="#fff"/>
-	<path d="${uptimeHeading}" fill="#fff"/>
+	${networkMetricHeader("GATEWAY UPTIME", 13)}
 	<path d="${valuePath}" fill="${accent}"/>
 	<path d="${daysPath}" fill="${accent}"/>
 	<path d="${remainderPath}" fill="#fff"/>
@@ -618,14 +613,13 @@ function renderGatewayUptimeSvg(details: { days: number; hours: number; minutes:
 }
 
 function renderNetworkStatusSvg(details: { ispName: string; online: boolean }, requestedBackground?: string): string {
-	const background = validColor(requestedBackground, "#333333");
+	const background = validColor(requestedBackground, "#000000");
 	const statusColor = details.online ? "#09ff00" : "#ff4057";
-	const heading = fittedCenteredTextPath(details.ispName.toUpperCase(), 16, 72, 28, 108);
 	const status = centeredTextPath(details.online ? "ONLINE" : "OFFLINE", 18, 72, 126);
 	return `
 <svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
 	<rect width="144" height="144" fill="${background}"/>
-	<path d="${heading}" fill="#fff"/>
+	${networkMetricHeader(details.ispName.toUpperCase())}
 	<g fill="none" stroke="${statusColor}" stroke-width="3.37">
 		<rect x="44.485" y="44.685" width="56.03" height="19.099" rx="4.54"/>
 		<rect x="44.485" y="71.648" width="56.03" height="19.099" rx="4.54"/>
@@ -641,12 +635,11 @@ function renderNetworkStatusSvg(details: { ispName: string; online: boolean }, r
 function renderIspUptimeSvg(value: string, requestedColor?: string, requestedBackground?: string): string {
 	const color = validColor(requestedColor, "#2fff00");
 	const background = validColor(requestedBackground, "#000000");
-	const heading = centeredTextPath("WAN UPTIME", 16, 72, 28);
 	const percentage = superscriptPercentagePaths(value.replace("%", ""));
 	return `
 <svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
 	<rect width="144" height="144" fill="${background}"/>
-	<path d="${heading}" fill="#fff"/>
+	${networkMetricHeader("WAN UPTIME")}
 	<path d="${percentage.value}" fill="${color}" stroke="#000" stroke-width="1" stroke-linejoin="round" paint-order="stroke"/>
 	<path d="${percentage.symbol}" fill="${color}" stroke="#000" stroke-width="1" stroke-linejoin="round" paint-order="stroke"/>
 </svg>`;
@@ -674,14 +667,18 @@ function superscriptPercentagePaths(value: string): { value: string; symbol: str
 function renderLatencySvg(value: string, requestedColor?: string, requestedBackground?: string): string {
 	const color = validColor(requestedColor, "#2fff00");
 	const background = validColor(requestedBackground, "#000000");
-	const heading = centeredTextPath("LATENCY", 16, 72, 28);
 	const valuePath = fittedCenteredTextPath(`${value}ms`, 48, 72, 89, 92);
 	return `
 <svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
 	<rect width="144" height="144" fill="${background}"/>
-	<path d="${heading}" fill="#fff"/>
+	${networkMetricHeader("LATENCY")}
 	<path d="${valuePath}" fill="${color}" stroke="#000" stroke-width="1" stroke-linejoin="round" paint-order="stroke"/>
 </svg>`;
+}
+
+function networkMetricHeader(label: string, maximumFontSize = 16): string {
+	const path = fittedCenteredTextPath(label, maximumFontSize, 72, 26, 124);
+	return `<rect width="144" height="35" fill="${NETWORK_METRIC_HEADER}"/><path d="${path}" fill="#fff"/>`;
 }
 
 function fittedCenteredTextPath(text: string, maximumFontSize: number, centerX: number, baselineY: number, maximumWidth: number): string {
